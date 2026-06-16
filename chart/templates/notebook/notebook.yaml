@@ -1,0 +1,178 @@
+{{- if and .Values.notebook.enabled .Values.global.openshift }}
+{{- $notebookName := include "ai-taxi-anomaly-detector.notebookName" . }}
+apiVersion: kubeflow.org/v1
+kind: Notebook
+metadata:
+  name: {{ $notebookName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-taxi-anomaly-detector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/odh-managed: "true"
+  annotations:
+    notebooks.opendatahub.io/inject-oauth: "true"
+    opendatahub.io/username: {{ required "notebook.username is required (set to the output of `oc whoami`)" .Values.notebook.username | quote }}
+    opendatahub.io/image-display-name: {{ .Values.notebook.image.displayName | quote }}
+    openshift.io/display-name: {{ .Values.notebook.displayName | default "Taxi Anomaly Detector" | quote }}
+    {{- if .Values.notebook.dashboard.host }}
+    notebooks.opendatahub.io/oauth-logout-url: {{ printf "https://%s/projects/%s?notebookLogout=%s" .Values.notebook.dashboard.host .Release.Namespace $notebookName | quote }}
+    {{- end }}
+spec:
+  template:
+    spec:
+      serviceAccountName: {{ include "ai-taxi-anomaly-detector.serviceAccountName" . }}
+      {{- if and .Values.notebook.notebooks.embedFromChart (not .Values.notebook.gitSync.enabled) }}
+      initContainers:
+      - name: copy-embedded-notebooks
+        image: busybox:1.36
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          mkdir -p /opt/app-root/src/notebooks
+          cp -rf /mnt/notebooks/. /opt/app-root/src/notebooks/
+          echo "Embedded notebooks:"
+          ls -la /opt/app-root/src/notebooks/
+        volumeMounts:
+        - name: workspace
+          mountPath: /opt/app-root/src
+        - name: embedded-notebooks
+          mountPath: /mnt/notebooks
+          readOnly: true
+      {{- else if and .Values.notebook.gitSync.enabled (not .Values.notebook.gitSync.useJob) }}
+      initContainers:
+      - name: git-sync-notebooks
+        image: {{ .Values.notebook.gitSync.image }}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: WORKSPACE_DIR
+          value: /opt/app-root/src
+        command:
+        - sh
+        - -c
+        - |
+          {{- include "ai-taxi-anomaly-detector.gitSyncScript" . | nindent 10 }}
+        volumeMounts:
+        - name: workspace
+          mountPath: /opt/app-root/src
+        {{- if .Values.notebook.gitSync.fallbackToEmbedded }}
+        - name: embedded-notebooks
+          mountPath: /mnt/embedded-notebooks
+          readOnly: true
+        {{- end }}
+      {{- end }}
+      containers:
+      - name: {{ $notebookName }}
+        image: {{ .Values.notebook.image.repository }}:{{ .Values.notebook.image.tag }}
+        imagePullPolicy: {{ .Values.notebook.image.pullPolicy }}
+        workingDir: /opt/app-root/src
+        env:
+        - name: NOTEBOOK_ARGS
+          value: |-
+            --ServerApp.port=8888
+            --ServerApp.token=''
+            --ServerApp.password=''
+            --ServerApp.base_url=/notebook/{{ .Release.Namespace }}/{{ $notebookName }}
+            --ServerApp.quit_button=False
+            {{- if .Values.notebook.dashboard.host }}
+            --ServerApp.tornado_settings={"user":"{{ .Values.notebook.username }}","hub_host":"https://{{ .Values.notebook.dashboard.host }}","hub_prefix":"/projects/{{ .Release.Namespace }}"}
+            {{- end }}
+        - name: RESTARTABLE
+          value: "yes"
+        - name: JUPYTER_IMAGE
+          value: {{ .Values.notebook.image.repository }}:{{ .Values.notebook.image.tag }}
+        - name: JUPYTER_RUNTIME_DIR
+          value: /opt/app-root/src/.jupyter/runtime
+        - name: JUPYTER_DATA_DIR
+          value: /opt/app-root/src/.jupyter/data
+        - name: JUPYTER_CONFIG_DIR
+          value: /opt/app-root/src/.jupyter/config
+        - name: IPYTHONDIR
+          value: /opt/app-root/src/.ipython
+        - name: HOME
+          value: /opt/app-root/src
+        - name: CONDARC
+          value: /opt/app-root/src/.condarc
+        - name: AWS_ACCESS_KEY_ID
+          value: {{ .Values.minio.secret.user | quote }}
+        - name: AWS_SECRET_ACCESS_KEY
+          value: {{ .Values.minio.secret.password | quote }}
+        - name: AWS_S3_ENDPOINT
+          value: {{ .Values.notebook.minio.endpoint | quote }}
+        - name: AWS_DEFAULT_REGION
+          value: {{ .Values.dataConnections.region | default "us-east-1" | quote }}
+        - name: AWS_S3_BUCKET
+          value: {{ .Values.notebook.minio.defaultBucket | quote }}
+        - name: TAXI_DATA_BUCKET
+          value: {{ .Values.notebook.minio.defaultBucket | quote }}
+        - name: TAXI_DEV_DATA_BUCKET
+          value: {{ index .Values.minio.buckets.names 0 | quote }}
+        - name: TAXI_DATA_OBJECT
+          value: {{ .Values.dataUpload.objectKey | quote }}
+        ports:
+        - containerPort: 8888
+          name: notebook-port
+          protocol: TCP
+        resources:
+          limits:
+            cpu: {{ .Values.notebook.resources.limits.cpu | quote }}
+            memory: {{ .Values.notebook.resources.limits.memory | quote }}
+          requests:
+            cpu: {{ .Values.notebook.resources.requests.cpu | quote }}
+            memory: {{ .Values.notebook.resources.requests.memory | quote }}
+        startupProbe:
+          httpGet:
+            scheme: HTTP
+            path: /notebook/{{ .Release.Namespace }}/{{ $notebookName }}/api
+            port: notebook-port
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 1
+          successThreshold: 1
+          failureThreshold: 30
+        livenessProbe:
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 1
+          successThreshold: 1
+          failureThreshold: 3
+          httpGet:
+            scheme: HTTP
+            path: /notebook/{{ .Release.Namespace }}/{{ $notebookName }}/api
+            port: notebook-port
+        readinessProbe:
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 1
+          successThreshold: 1
+          failureThreshold: 3
+          httpGet:
+            scheme: HTTP
+            path: /notebook/{{ .Release.Namespace }}/{{ $notebookName }}/api
+            port: notebook-port
+        volumeMounts:
+        - name: workspace
+          mountPath: /opt/app-root/src
+        {{- if .Values.notebook.shm.enabled }}
+        - name: shm
+          mountPath: /dev/shm
+        {{- end }}
+      volumes:
+      - name: workspace
+        persistentVolumeClaim:
+          claimName: {{ include "ai-taxi-anomaly-detector.fullname" . }}-notebook-pvc
+      {{- if eq (include "ai-taxi-anomaly-detector.embeddedNotebooksEnabled" .) "true" }}
+      - name: embedded-notebooks
+        configMap:
+          name: {{ include "ai-taxi-anomaly-detector.fullname" . }}-notebooks
+      {{- end }}
+      {{- if .Values.notebook.shm.enabled }}
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: {{ .Values.notebook.shm.size }}
+      {{- end }}
+{{- end }}

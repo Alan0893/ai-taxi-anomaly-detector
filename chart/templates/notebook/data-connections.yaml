@@ -1,0 +1,25 @@
+{{- if and .Values.notebook.enabled .Values.global.openshift .Values.dataConnections.enabled }}
+{{- range .Values.dataConnections.connections }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "ai-taxi-anomaly-detector.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: notebook
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/managed: "true"
+  annotations:
+    opendatahub.io/connection-type: "s3"
+    openshift.io/display-name: {{ .displayName | quote }}
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: {{ $.Values.minio.secret.user | quote }}
+  AWS_SECRET_ACCESS_KEY: {{ $.Values.minio.secret.password | quote }}
+  AWS_S3_ENDPOINT: {{ $.Values.dataConnections.endpoint | quote }}
+  AWS_DEFAULT_REGION: {{ $.Values.dataConnections.region | quote }}
+  AWS_S3_BUCKET: {{ .bucket | quote }}
+{{- end }}
+{{- end }}
