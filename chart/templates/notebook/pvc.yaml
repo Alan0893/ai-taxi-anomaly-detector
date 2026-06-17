@@ -1,0 +1,24 @@
+{{- if and .Values.notebook.enabled .Values.global.openshift }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ai-taxi-anomaly-detector.fullname" . }}-notebook-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-taxi-anomaly-detector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: "Taxi Anomaly Detector Notebook Workspace"
+    helm.sh/resource-policy: keep
+    helm.sh/hook-weight: "-5"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.notebook.storage.size }}
+  {{- if .Values.notebook.storage.storageClassName }}
+  storageClassName: {{ .Values.notebook.storage.storageClassName }}
+  {{- end }}
+{{- end }}

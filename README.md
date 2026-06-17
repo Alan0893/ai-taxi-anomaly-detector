@@ -1,37 +1,12 @@
-# [INSERT quickstart title here]
+# Detect taxi fare anomalies with OpenShift AI
 
-> **CONTRIBUTOR TODO: update title**
->
-> Replace the H1 title above with your quickstart title
->
-> **TITLE requirements:**
-> - MAX CHAR: 64
-> - Industry use case, e.g.: "Protect patient data with LLM guardrails"
->
-> _TITLE will be extracted for publication._
-
-[Add your short description here - max 160 characters]
-
-> **CONTRIBUTOR TODO: short description**
->
-> Add a SHORT DESCRIPTION of your use case between H1 title and the Table of Contents
->
-> **SHORT DESCRIPTION requirements:**
-> - MAX CHAR: 160
-> - Describe the INDUSTRY use case
->
-> _SHORT DESCRIPTION will be extracted for publication._
+Deploy a data science workbench with MinIO storage and Jupyter notebooks to find anomalous taxi trips on OpenShift AI.
 
 ## Table of Contents
 
-> **CONTRIBUTOR TODO: update table of contents links**
->
-> This section is recommended for better navigation. The links below are examples - update them to match your actual README sections.
-
 - [Overview](#overview)
 - [Detailed description](#detailed-description)
-  - [See it in action](#see-it-in-action)
-  - [Architecture diagrams](#architecture-diagrams)
+  - [Architecture](#architecture)
 - [Requirements](#requirements)
   - [Minimum hardware requirements](#minimum-hardware-requirements)
   - [Minimum software requirements](#minimum-software-requirements)
@@ -48,389 +23,269 @@
 
 ## Overview
 
-> **CONTRIBUTOR TODO: add overview**
->
-> Write 2-4 sentences that give a high-level summary of what this quickstart does.
->
-> **Focus on:**
-> - What problem does this solve?
-> - Who is this for? (e.g., "Healthcare providers managing patient data")
-> - What will users be able to do after deploying this?
->
-> Keep it non-technical - save technical details for later sections.
+This quickstart helps transportation and mobility teams detect unusual taxi trips—such as inflated fares or implausible distances—using anomaly detection on OpenShift AI. It provisions MinIO object storage, loads sample taxi trip data, and delivers a Jupyter workbench with notebooks ready to run. After deploying, you can explore data connections in the OpenShift AI dashboard and run Isolation Forest models to flag outliers.
 
 ## Detailed description
 
-> **CONTRIBUTOR TODO: add detailed description**
->
-> Write 2-3 paragraphs that expand on the overview.
->
-> **Include:**
-> - The business/industry problem in more detail
-> - How this quickstart addresses that problem
-> - Key features or capabilities users will gain
-> - Real-world scenarios where this would be used
->
-> This is about the USE CASE, not the technology. Don't explain how it works technically yet.
->
-> **Example:** "In healthcare settings, clinicians often need to quickly access patient information while ensuring HIPAA compliance. This quickstart demonstrates how AI can summarize patient records while maintaining strict data privacy through guardrails..."
+Ride-hailing and taxi operators need to spot billing anomalies, fraud patterns, and data quality issues across large trip datasets. Manual review does not scale, and ad-hoc scripts lack the governed environment that enterprise AI platforms provide.
 
+This quickstart addresses that gap by deploying a complete experimentation stack on OpenShift AI. A Helm chart installs MinIO with `dev-data` and `data` buckets, uploads synthetic taxi trip CSV data (including planted anomalies for demonstration), registers OpenShift AI data connections for both buckets, and launches a Standard Data Science Jupyter notebook synced from this repository.
 
-### See it in action
+In production, **Zetaris** can serve as the upstream data platform; MinIO holds working copies for experimentation on the cluster. The included notebooks walk through environment validation and anomaly detection with scikit-learn.
 
-> **CONTRIBUTOR TODO: add demo links**
->
-> This section is RECOMMENDED but optional.
->
-> **Add links to:**
-> - Arcade interactive demos (preferred)
-> - YouTube/video walkthroughs
-> - Live demo instances (if available)
->
-> This helps users see the value before deploying. Many users don't have immediate access to deployment environments, so demos are crucial.
->
-> **Example:**
-> - [Try the interactive demo](https://arcade.example.com/your-demo)
-> - [Watch the 3-minute walkthrough](https://youtube.com/example)
+### Architecture
 
-### Architecture diagrams
+```mermaid
+flowchart LR
+    subgraph OpenShift["OpenShift AI namespace"]
+        Helm["Helm chart"]
+        MinIO["MinIO\n(dev-data, data buckets)"]
+        Notebook["Jupyter Notebook\n(s2i-generic-data-science-notebook)"]
+        DC["Data Connections\n(taxi-dev-data, taxi-data)"]
+        Jobs["Post-install Jobs\n(buckets, data upload)"]
+    end
 
-> **CONTRIBUTOR TODO: add architecture diagram**
->
-> This section is REQUIRED.
->
-> **Include:**
-> - A clear architecture diagram showing components and data flow
-> - Put image files in `docs/images/` folder
-> - Use descriptive filenames (e.g., `architecture-overview.png`)
-> - Add alt text for accessibility
->
-> **Example:**
-> ```
-> ![Architecture diagram showing data flow from user input through LLM to output](docs/images/architecture-overview.png)
-> ```
->
-> Optionally add a brief explanation of the diagram below the image.
+    Helm --> MinIO
+    Helm --> Jobs
+    Jobs --> MinIO
+    Helm --> Notebook
+    Helm --> DC
+    DC --> MinIO
+    Notebook --> MinIO
+    Git["GitHub repo\n(notebooks/)"] --> Jobs
+    Jobs --> Notebook
+```
 
+**Components deployed by the chart:**
+
+| Component | Purpose |
+|-----------|---------|
+| MinIO (subchart) | S3-compatible storage with `dev-data` and `data` buckets |
+| Post-install jobs | Create buckets, upload `taxi_trips.csv`, clone notebooks to PVC |
+| Data connection secrets | OpenShift AI dashboard integration for MinIO buckets |
+| Jupyter Notebook | OpenShift AI workbench with MinIO env vars pre-configured |
 
 ## Requirements
 
-> _This section groups all prerequisites users need before deploying_
-
 ### Minimum hardware requirements
 
-> **CONTRIBUTOR TODO: add minimum hardware requirements**
->
-> This section is REQUIRED. Be SPECIFIC - don't say "GPU", say exactly which GPU.
->
-> **Include:**
-> - CPU: specify cores, requests, and limits
-> - Memory: specify GiB, requests, and limits  
-> - GPU: exact models (e.g., "NVIDIA A10, A100, L40S, or T4")
-> - Storage: if significant storage is needed
->
-> If your quickstart deploys a model, list the model's resource requirements separately.
->
-> **Example:**
->
-> **Application:**
-> - CPU: 2 vCPU (request) / 4 vCPU (limit)
-> - Memory: 4 GiB (request) / 8 GiB (limit)
->
-> **LLM (if deploying a model):**
-> - CPU: 4 vCPU (request) / 8 vCPU (limit)
-> - Memory: 16 GiB (request) / 32 GiB (limit)
-> - GPU: 1 NVIDIA GPU (A10, A100, L40S, T4, or similar)
->
-> > **Note**: If using MaaS (external model endpoint), GPU is not required.
+**MinIO:**
+
+- CPU: 200m (request) / 2 vCPU (limit)
+- Memory: 1 GiB (request) / 2 GiB (limit)
+- Storage: 10 GiB persistent volume
+
+**Jupyter Notebook:**
+
+- CPU: 1 vCPU (request) / 2 vCPU (limit)
+- Memory: 4 GiB (request) / 8 GiB (limit)
+- Storage: 10 GiB persistent volume (workspace) + 1 GiB shared memory
+
+No GPU is required.
 
 ### Minimum software requirements
 
-> **CONTRIBUTOR TODO: add minimum software requirements**
->
-> This section is REQUIRED. Be SPECIFIC about versions.
->
-> **Include:**
-> - OpenShift version (e.g., "OpenShift 4.14 or later")
-> - OpenShift AI version (e.g., "OpenShift AI 2.22 or later")
-> - Other platform dependencies (operators, services)
-> - Client tools (oc CLI, helm, etc.)
->
-> **BAD:** "Requires OpenShift AI"  
-> **GOOD:** "Tested with OpenShift AI 2.22-2.25 on OpenShift 4.14+"
+- OpenShift 4.14 or later
+- OpenShift AI 2.22 or later (tested with the `s2i-generic-data-science-notebook:2025.2` workbench image)
+- `oc` CLI (version 4.14+) installed and authenticated
+- `helm` CLI (version 3.12+) installed
+- `make` (optional, for Makefile targets)
 
 ### Required user permissions
 
-> **CONTRIBUTOR TODO: add user permissions**
->
-> This section is REQUIRED. Be clear about what permissions are needed.
->
-> **Options:**
-> - Regular user with standard permissions (preferred!)
-> - Namespace admin
-> - Cluster admin (only if absolutely necessary - explain why)
->
-> **Example:**
->
-> This quickstart can be deployed by any user with:
-> - Permission to create projects/namespaces
-> - Permission to deploy applications via Helm
-> - No cluster admin access required
+This quickstart can be deployed by any user with:
 
+- Permission to create OpenShift projects
+- Permission to deploy Helm charts in their project
+- Access to the OpenShift AI dashboard to launch the notebook workbench
+
+No cluster admin access is required.
 
 ## Deploy
 
-> _This section contains all deployment instructions_
-
 ### Prerequisites
 
-> **CONTRIBUTOR TODO: verify and update prerequisites**
->
-> List specific items users must have/do BEFORE running installation commands.
->
-> **Include:**
-> - Access to specific platforms/clusters
-> - CLI tools installed (with version requirements)
-> - Authentication/credentials needed
-> - Network access requirements
->
-> **Example:**
->
-> Before deploying, ensure you have:
-> - Access to a Red Hat OpenShift cluster with OpenShift AI 2.22+ installed
-> - `oc` CLI (version 4.14+) installed and authenticated
-> - `helm` CLI (version 3.12+) installed
-> - API key for your model endpoint (if using MaaS)
+Before deploying, ensure you have:
+
+- Access to a Red Hat OpenShift cluster with OpenShift AI installed
+- `oc` CLI authenticated to the cluster
+- `helm` CLI installed
+- Sufficient storage capacity for two 10 GiB persistent volume claims
 
 ### Installation
 
-> **CONTRIBUTOR TODO: customize installation steps**
->
-> Provide STEP-BY-STEP instructions. Assume users have limited knowledge.
->
-> **Include:**
-> - Clear numbered steps
-> - Exact commands to run (users should be able to copy/paste)
-> - Explanation of what each major step does
-> - Any configuration choices users need to make
->
-> Test these steps yourself on a fresh environment to ensure they work!
->
-> **Key things to update:**
-> - Replace "my-quickstart" and "YOUR_QUICKSTART_NAME" with your actual names
-> - Add any additional --set flags specific to your quickstart
-> - If your quickstart requires a model, keep the model options section below
-> - If your quickstart does NOT require a model, remove the model options section below entirely
+#### Option A: Using the Makefile (recommended)
+
+The Makefile provides targets for project and chart lifecycle management. Override `NAMESPACE` as needed:
+
+```bash
+git clone https://github.com/rh-ai-quickstart/ai-taxi-anomaly-detector.git
+cd ai-taxi-anomaly-detector
+
+# Create the OpenShift project
+make create-project NAMESPACE=ai-taxi-anomaly-detector
+
+The Makefile auto-detects `notebook.username` (`oc whoami`) and `notebook.dashboard.host` (rhods-dashboard route). Override if needed:
+
+```bash
+make install NAMESPACE=ai-taxi-anomaly-detector \
+  OPENSHIFT_USER="$(oc whoami)" \
+  DASHBOARD_HOST="$(oc get route rhods-dashboard -n redhat-ods-applications -o jsonpath='{.spec.host}')"
+```
+
+#### Option B: Manual installation
 
 1. Clone the repository:
+
 ```bash
-git clone https://github.com/rh-ai-quickstart/YOUR_QUICKSTART_NAME.git
-cd YOUR_QUICKSTART_NAME
+git clone https://github.com/rh-ai-quickstart/ai-taxi-anomaly-detector.git
+cd ai-taxi-anomaly-detector
 ```
 
 2. Create a new OpenShift project:
-```bash
-PROJECT="my-quickstart"
-oc new-project ${PROJECT}
-```
-
-3. Install using Helm:
 
 ```bash
-helm install my-quickstart ./chart --namespace ${PROJECT}
+NAMESPACE="ai-taxi-anomaly-detector"
+oc new-project ${NAMESPACE}
 ```
 
-#### If your quickstart requires a model
-
-**Option A: Use your own model (MaaS - Model as a Service)**
-
-If you have an existing model endpoint, provide the model name, endpoint, and API key:
-```bash
-helm install my-quickstart ./chart --namespace ${PROJECT} \
-  --set model.name=YOUR_MODEL_NAME \
-  --set model.endpoint=YOUR_MODEL_ENDPOINT \
-  --set model.api_key=YOUR_API_KEY
-```
-
-> **Note**: The `model.endpoint` should be the full URL including protocol and port if needed (e.g., `https://my-model.example.com` or `http://my-model:8080`).
-
-**Option B: Deploy with a model included in the chart**
-
-If you don't provide any model configuration, the chart will deploy a default model on your cluster:
-```bash
-helm install my-quickstart ./chart --namespace ${PROJECT}
-```
-
-> **Note**: Option B requires a GPU available in your cluster for the LLM deployment. See [Minimum hardware requirements](#minimum-hardware-requirements) for details. You must add your own model InferenceService template under `chart/templates/` for this option to work.
-
-#### Testing model access (before deploying)
-
-If you are bringing your own model (Option A), you can verify the endpoint is reachable **before** installing the chart:
+3. Update chart dependencies and install:
 
 ```bash
-oc run test-model-access --rm -it --restart=Never \
-  --image=registry.access.redhat.com/ubi9/ubi-minimal:latest \
-  -- /bin/sh -c 'curl -sf --max-time 10 \
-    -H "Authorization: Bearer YOUR_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\": \"YOUR_MODEL_NAME\", \"messages\": [{\"role\": \"user\", \"content\": \"Say hello in one word.\"}], \"max_tokens\": 10}" \
-    "YOUR_MODEL_ENDPOINT/v1/chat/completions" && echo "" && echo "SUCCESS" || echo "FAILED"'
+helm dependency update ./chart
+helm upgrade --install ai-taxi-anomaly-detector ./chart \
+  --namespace ${NAMESPACE} \
+  --wait \
+  --timeout 15m
 ```
 
-Replace `YOUR_API_KEY`, `YOUR_MODEL_NAME`, and `YOUR_MODEL_ENDPOINT` with your actual values.
+Post-install hooks automatically:
+
+- Create MinIO buckets (`dev-data`, `data`)
+- Upload synthetic `taxi_trips.csv` with planted anomalies to both buckets
+- Clone notebooks from git into the workbench workspace via an initContainer
 
 ### Validating the deployment
 
-> **CONTRIBUTOR TODO: add validation steps**
->
-> Tell users how to verify the deployment was successful.
->
-> **Include:**
-> - Commands to check pod status
-> - How to access the application (routes, URLs)
-> - How to verify functionality (e.g., "run helm test")
-> - Expected output/behavior
->
-> **Example:**
->
-> 1. Check all pods are running:
->    ```bash
->    oc get pods -n ${PROJECT}
->    ```
->    
-> 2. Get the application URL:
->    ```bash
->    echo https://$(oc get route/my-app -n ${PROJECT} --template='{{.spec.host}}')
->    ```
->    
-> 3. Test the endpoint is responding:
->    ```bash
->    curl -s https://$(oc get route/my-app -n ${PROJECT} --template='{{.spec.host}}')/health
->    ```
->
-> If your quickstart uses a model, you can run the included Helm test:
-> ```bash
-> helm test my-quickstart --namespace ${PROJECT}
-> ```
->
-> If your quickstart does not use a model, remove the helm test step and add your own validation steps.
+1. Check that pods and jobs completed successfully:
+
+```bash
+oc get pods,jobs -n ${NAMESPACE}
+```
+
+Expected resources include a MinIO pod, the notebook workbench pod (with a git-sync initContainer), and completed post-install jobs (`*-minio-create-buckets`, `*-upload-taxi-data`).
+
+2. Verify MinIO buckets contain data (from a pod with network access):
+
+```bash
+oc get secret minio -n ${NAMESPACE} -o jsonpath='{.data.user}' | base64 -d && echo
+```
+
+3. Open the OpenShift AI dashboard, select your project, and launch the **Taxi Anomaly Detector** workbench (visible under your OpenShift username).
+
+4. In the workbench, open `notebooks/init_check.ipynb` to verify MinIO connectivity and data upload, then run `notebooks/taxi_anomaly_detector.ipynb` to detect anomalies with Isolation Forest.
+
+5. Confirm data connections appear in the dashboard:
+
+```bash
+oc get secrets -n ${NAMESPACE} -l opendatahub.io/managed=true
+```
+
+You should see `taxi-dev-data` and `taxi-data` connection secrets.
 
 ### Delete
 
-> **CONTRIBUTOR TODO: verify deletion steps**
->
-> Provide clear instructions to cleanly remove the deployment.
->
-> **Include:**
-> - Command to uninstall via Helm
-> - Any manual cleanup needed (secrets, PVCs, etc.)
-> - How to verify complete removal
->
-> Users should be able to return their environment to pre-deployment state.
->
-> **Example:**
->
-> To completely remove the deployment:
->
-> 1. Uninstall the Helm release:
->    ```bash
->    helm uninstall my-quickstart --namespace ${PROJECT}
->    ```
->
-> 2. (Optional) Delete the project:
->    ```bash
->    oc delete project ${PROJECT}
->    ```
+#### Using the Makefile
+
+```bash
+make uninstall NAMESPACE=ai-taxi-anomaly-detector
+make delete-project NAMESPACE=ai-taxi-anomaly-detector
+```
+
+#### Manual deletion
+
+1. Uninstall the Helm release:
+
+```bash
+helm uninstall ai-taxi-anomaly-detector --namespace ${NAMESPACE}
+```
+
+2. Delete the project (removes remaining resources including PVCs):
+
+```bash
+oc delete project ${NAMESPACE}
+```
+
+> **Note:** The notebook workspace PVC is annotated with `helm.sh/resource-policy: keep` and may persist after `helm uninstall` if it was already bound. Deleting the project removes it.
 
 ## Repository structure
 
-> **CONTRIBUTOR TODO: update the file tree**
->
-> Show the organization of your repository so contributors understand where things are.
->
-> Update this to reflect your actual structure - add application code directories, additional config folders, etc.
->
-> Keep it concise - don't list every single file, just the important directories and key files.
-
 ```
 .
-├── chart/                    # Helm chart for deploying the quickstart
-│   ├── Chart.yaml            # Chart metadata
-│   ├── values.yaml           # Default configuration values (model info, resources, etc.)
-│   └── templates/            # Kubernetes resource templates
-│       ├── test-model-access.yaml  # Helm test for verifying model connectivity
-│       └── ...               # Add your templates here (deployments, services, etc.)
-├── docs/
-│   └── images/               # Architecture diagrams and screenshots
+├── Makefile                          # OpenShift project and Helm lifecycle targets
+├── chart/                            # Helm chart for deploying the quickstart
+│   ├── files/
+│   │   └── notebooks/                # Optional embed source (notebook.notebooks.embedFromChart)
+│   ├── Chart.yaml                    # Chart metadata and MinIO subchart dependency
+│   ├── Chart.lock                    # Locked dependency versions
+│   ├── values.yaml                   # MinIO, notebook, and data connection defaults
+│   └── templates/
+│       ├── _helpers.tpl              # Template helpers
+│       ├── hooks/
+│       │   ├── post-install-buckets.yaml   # Create MinIO buckets
+│       │   └── post-install-upload-data.yaml  # Upload taxi_trips.csv
+│       ├── notebook/
+│       │   ├── notebooks-configmap.yaml  # Embeds notebooks from chart/files/notebooks
+│       │   ├── copy-notebooks.yaml   # Optional hook Job (gitSync.useJob; requires RWX PVC)
+│       │   ├── data-connections.yaml # OpenShift AI S3 data connection secrets
+│       │   ├── notebook.yaml         # Kubeflow Notebook workbench
+│       │   └── pvc.yaml              # Notebook workspace storage
+│       └── rbac/
+│           └── serviceaccount.yaml   # Service account for setup jobs
+├── notebooks/
+│   ├── init_check.ipynb              # Verify MinIO connectivity and uploaded data
+│   └── taxi_anomaly_detector.ipynb   # Isolation Forest anomaly detection demo
 └── README.md
 ```
 
-> **EXAMPLE:** If your quickstart includes application source code (e.g., a web UI, API server), add it as a sibling directory to chart/. For example:
-> ```
-> ├── my-app/                 # Application source code
-> │   ├── app.py
-> │   ├── Containerfile
-> │   └── requirements.txt
-> ```
-
 ## References
 
-> **CONTRIBUTOR TODO: add relevant links**
->
-> This section is RECOMMENDED but optional.
->
-> **Include links to:**
-> - Official documentation for technologies used
-> - Blog posts or articles about the use case
-> - Research papers or whitepapers
-> - Related quickstarts or examples
-> - Partner/vendor documentation
->
-> **Example:**
-> - [OpenShift AI Documentation](https://docs.redhat.com/en/openshift-ai)
-> - [LangChain Documentation](https://langchain.com/docs)
-> - [Blog: Building HIPAA-Compliant AI Applications](https://example.com/blog)
->
-> _Remove this section entirely if you have no references to add._
+- [OpenShift AI Documentation](https://docs.redhat.com/en/openshift_ai)
+- [ai-architecture-charts MinIO chart](https://github.com/rh-ai-quickstart/ai-architecture-charts)
+- [scikit-learn Isolation Forest](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html)
 
 ## Technical details
 
-> **CONTRIBUTOR TODO: add technical deep dive**
->
-> This section is OPTIONAL.
->
-> **Use this for:**
-> - How the components work together technically
-> - Implementation details developers would want to know
-> - Model details (size, quantization, context window)
-> - API endpoints and integration points
-> - Performance characteristics
->
-> This is where technical depth goes - the earlier sections focus on the use case.
->
-> _Remove this section if not needed._
+**Chart:** `ai-taxi-anomaly-detector` v0.1.0
+
+**MinIO subchart:** `minio` v0.5.5 from [ai-architecture-charts](https://rh-ai-quickstart.github.io/ai-architecture-charts)
+
+**Default MinIO credentials** (override in production via `values.yaml`):
+
+| Key | Value |
+|-----|-------|
+| User | `taxi_minio_user` |
+| Password | `taxi_minio_password` |
+| Endpoint | `http://minio:9000` |
+
+**Synthetic dataset:** 500 taxi trips with columns `trip_id`, `vendor_id`, `pickup_datetime`, `passenger_count`, `trip_distance`, `fare_amount`, `tip_amount`. Ten rows contain injected distance/fare anomalies.
+
+**Notebook image:** `s2i-generic-data-science-notebook:2025.2` from the cluster's `redhat-ods-applications` image stream. List available tags with `oc get imagestreamtag -n redhat-ods-applications | grep datascience`.
+
+**Notebook configuration:** The chart sets `notebooks.opendatahub.io/inject-oauth: "true"` (oauth-proxy sidecar for dashboard access), `opendatahub.io/username` (your OpenShift user), and `ServerApp.tornado_settings` with the RHODS dashboard host so workbench links resolve correctly.
+
+Notebooks are cloned from git via an **initContainer** (`notebook.gitSync`). If `notebooks/` is not yet on the configured branch, `notebook.gitSync.fallbackToEmbedded: true` copies the chart-bundled notebooks from `chart/files/notebooks` so the workbench still starts.
+
+**Environment variables** injected into the notebook for S3 access: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION`, `AWS_S3_BUCKET`, `TAXI_DATA_BUCKET`, `TAXI_DEV_DATA_BUCKET`, `TAXI_DATA_OBJECT`.
+
+**Anomaly detection:** `IsolationForest(contamination=0.02)` on `passenger_count`, `trip_distance`, `fare_amount`, and `tip_amount`.
 
 ## Tags
 
-> **CONTRIBUTOR TODO: add metadata and tags for publication**
->
-> Tags are REQUIRED for publication to redhat.com catalog.
->
-> **Fill in:**
-> - **Title:** (must match H1 heading, max 64 chars)
-> - **Description:** (must match short description, max 160 chars)
-> - **Industry:** ONE from the list in CONTRIBUTING.md (e.g., Healthcare, Retail, Financial Services)
-> - **Product:** Primary Red Hat product (e.g., OpenShift AI, OpenShift, RHEL)
-> - **Use case:** Optional descriptor (e.g., security, automation, productivity)
-> - **Partner:** Optional, list partners if applicable (e.g., NVIDIA, Intel)
-> - **Contributor org:** Defaults to "Red Hat" unless partner or community contribution
->
-> **Example:**
->
-> **Title:** Protect patient data with LLM guardrails  
-> **Description:** Deploy HIPAA-compliant AI assistants for healthcare with built-in data protection and audit logging  
-> **Industry:** Healthcare provider  
-> **Product:** OpenShift AI  
-> **Use case:** Security, compliance  
-> **Partner:** N/A  
-> **Contributor org:** Red Hat
+**Title:** Detect taxi fare anomalies with OpenShift AI  
+**Description:** Deploy a data science workbench with MinIO storage and Jupyter notebooks to find anomalous taxi trips on OpenShift AI.  
+**Industry:** Transportation  
+**Product:** OpenShift AI  
+**Use case:** Anomaly detection, data science  
+**Partner:** Zetaris  
+**Contributor org:** Red Hat

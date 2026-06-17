@@ -1,0 +1,43 @@
+{{- if and .Values.notebook.enabled .Values.notebook.gitSync.enabled .Values.notebook.gitSync.useJob }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ai-taxi-anomaly-detector.fullname" . }}-copy-notebooks
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-taxi-anomaly-detector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "ai-taxi-anomaly-detector.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: notebook-setup
+    spec:
+      serviceAccountName: {{ include "ai-taxi-anomaly-detector.serviceAccountName" . }}
+      restartPolicy: OnFailure
+      containers:
+      - name: git-clone
+        image: {{ .Values.notebook.gitSync.image }}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: WORKSPACE_DIR
+          value: /workspace
+        command:
+        - sh
+        - -c
+        - |
+          {{- include "ai-taxi-anomaly-detector.gitSyncScript" . | nindent 10 }}
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+      volumes:
+      - name: workspace
+        persistentVolumeClaim:
+          claimName: {{ include "ai-taxi-anomaly-detector.fullname" . }}-notebook-pvc
+{{- end }}

@@ -1,20 +1,148 @@
 ---
-# LLM configuration (optional)
-# Only needed if your quickstart requires a model.
-#
-# Option A: Bring your own model (MaaS - Model as a Service)
-# Uncomment and set these values to use an external model endpoint.
-# model:
-#   name: my-model
-#   endpoint: https://my-maas-instance:443    # full URL including protocol and port
-#   api_key: my-api-key
-#
-# Option B: Deploy a model with this chart
-# When model is not set (or empty), the chart can deploy a default model.
-# Add your own InferenceService template under templates/ for this.
-model: {}
+# Default values for ai-taxi-anomaly-detector.
 
-# -- Add your quickstart-specific values below --
-# app:
-#   replicas: 1
-#   image: quay.io/my-org/my-app:latest
+global:
+  openshift: true
+
+nameOverride: "ai-taxi-anomaly-detector"
+fullnameOverride: "ai-taxi-anomaly-detector"
+
+imagePullSecrets: []
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  runAsNonRoot: true
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+serviceAccount:
+  create: true
+  name: "taxi-anomaly-service-account"
+
+# MinIO subchart (ai-architecture-charts)
+minio:
+  enabled: true
+
+  image:
+    repository: quay.io/minio/minio
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 9090
+    apiPort: 9000
+
+  volumeClaimTemplates:
+    - metadata:
+        name: minio-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+
+  volumeMounts:
+    - mountPath: /data
+      name: minio-data
+
+  secret:
+    create: true
+    user: taxi_minio_user
+    password: taxi_minio_password
+    host: minio
+    port: "9000"
+
+  sampleFileUpload:
+    enabled: false
+
+  buckets:
+    create: true
+    names:
+      - dev-data
+      - data
+
+  serviceAccount:
+    create: false
+    name: taxi-anomaly-service-account
+
+# Post-install job uploads dummy taxi CSV data to MinIO buckets
+dataUpload:
+  enabled: true
+  buckets:
+    - dev-data
+    - data
+  objectKey: taxi_trips.csv
+
+# OpenShift AI data connections for MinIO buckets
+dataConnections:
+  enabled: true
+  endpoint: "http://minio:9000"
+  region: us-east-1
+  connections:
+    - name: taxi-dev-data
+      displayName: "Taxi Dev Data (MinIO)"
+      bucket: dev-data
+    - name: taxi-data
+      displayName: "Taxi Data (MinIO)"
+      bucket: data
+
+# Jupyter notebook (OpenShift AI workbench)
+notebook:
+  enabled: true
+  # OpenShift user who owns the workbench — must match `oc whoami`
+  username: ""
+  displayName: "Taxi Anomaly Detector"
+  dashboard:
+    # RHODS dashboard route host (without https://), e.g. rhods-dashboard-redhat-ods-applications.apps.<cluster>
+    host: ""
+
+  image:
+    repository: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook
+    tag: "2025.2"
+    pullPolicy: IfNotPresent
+    displayName: "Standard Data Science"
+
+  resources:
+    limits:
+      cpu: "2"
+      memory: "8Gi"
+    requests:
+      cpu: "1"
+      memory: "4Gi"
+
+  storage:
+    size: 10Gi
+    storageClassName: ""
+
+  shm:
+    enabled: true
+    size: 1Gi
+
+  # Bundle notebooks in chart/files/notebooks (used alone or as gitSync fallback).
+  notebooks:
+    embedFromChart: false
+
+  gitSync:
+    enabled: false
+    # Use chart-bundled notebooks when the git repo has no notebooks/ path yet.
+    fallbackToEmbedded: true
+    # Clones via initContainer on the workbench pod (avoids RWO multi-attach vs a hook Job).
+    # useJob: true runs a separate Helm hook Job — only use with ReadWriteMany PVCs.
+    useJob: false
+    repo: "https://github.com/rh-ai-quickstart/ai-taxi-anomaly-detector.git"
+    branch: "main"
+    image: "alpine/git:latest"
+    notebooksPath: "notebooks"
+
+  minio:
+    endpoint: "http://minio:9000"
+    defaultBucket: "data"

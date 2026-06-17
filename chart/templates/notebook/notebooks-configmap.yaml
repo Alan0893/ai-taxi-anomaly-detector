@@ -1,0 +1,15 @@
+{{- if and .Values.notebook.enabled (eq (include "ai-taxi-anomaly-detector.embeddedNotebooksEnabled" .) "true") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-taxi-anomaly-detector.fullname" . }}-notebooks
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-taxi-anomaly-detector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+data:
+{{- range $path, $_ := .Files.Glob "files/notebooks/*.ipynb" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}
