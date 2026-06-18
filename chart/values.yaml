@@ -74,13 +74,42 @@ minio:
     create: false
     name: taxi-anomaly-service-account
 
-# Post-install job uploads dummy taxi CSV data to MinIO buckets
+# Post-install job uploads synthetic taxi CSV data to MinIO buckets (demo / offline use)
 dataUpload:
-  enabled: true
+  enabled: false
   buckets:
     - dev-data
     - data
   objectKey: taxi_trips.csv
+
+# Post-install job imports NYC TLC trip record parquet files into MinIO.
+# Source: https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+# Files follow {tripType}_{YYYY-MM}.parquet on the TLC CloudFront bucket.
+# TLC publishes data roughly two months behind the current calendar month.
+dataImport:
+  enabled: true
+  baseUrl: "https://d37ci6vzurychx.cloudfront.net/trip-data"
+  startYear: 2025
+  startMonth: 10
+  endYear: 2026
+  endMonth: 1
+  tripTypes:
+    - yellow_tripdata
+    - green_tripdata
+    - fhv_tripdata
+    - fhvhv_tripdata
+  buckets:
+    - data
+  prefix: tlc-trip-data
+  skipExisting: true
+  activeDeadlineSeconds: 7200
+  resources:
+    limits:
+      cpu: "2"
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
 
 # OpenShift AI data connections for MinIO buckets
 dataConnections:
@@ -132,7 +161,7 @@ notebook:
     embedFromChart: false
 
   gitSync:
-    enabled: false
+    enabled: true
     # Use chart-bundled notebooks when the git repo has no notebooks/ path yet.
     fallbackToEmbedded: true
     # Clones via initContainer on the workbench pod (avoids RWO multi-attach vs a hook Job).
