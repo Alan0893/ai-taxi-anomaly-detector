@@ -1,0 +1,221 @@
+{{- if and .Values.minio.enabled .Values.minio.buckets.create .Values.dataImport.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-import-taxi-data
+  labels:
+    {{- include "ai-taxi-anomaly-detector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "4"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ .Values.dataImport.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-taxi-anomaly-detector.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.minio.serviceAccount.name | default "default" }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-minio
+          image: curlimages/curl:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+          args:
+            - -c
+            - |-
+              echo "Waiting for MinIO to be ready..."
+              until curl -sf http://{{ include "minio.fullname" . }}:{{ .Values.minio.service.apiPort }}/minio/health/live; do
+                echo -n "."
+                sleep 5
+              done
+              echo "MinIO is ready!"
+              sleep 10
+      containers:
+        - name: import-taxi-data
+          image: python:3.11-slim
+          imagePullPolicy: IfNotPresent
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.dataImport.resources | nindent 12 }}
+          command:
+            - /bin/bash
+          args:
+            - -ec
+            - |-
+              pip install --user --no-cache-dir -q boto3
+              python3 << 'EOF'
+              import os
+              import sys
+              import tempfile
+              import urllib.error
+              import urllib.request
+
+              import boto3
+
+              def month_range(start_year, start_month, end_year, end_month):
+                  year, month = start_year, start_month
+                  while (year, month) <= (end_year, end_month):
+                      yield year, month
+                      month += 1
+                      if month > 12:
+                          month = 1
+                          year += 1
+
+              def build_object_key(prefix, trip_type, year, month):
+                  filename = f"{trip_type}_{year:04d}-{month:02d}.parquet"
+                  if prefix:
+                      return f"{prefix}/{filename}"
+                  return filename
+
+              base_url = os.environ["BASE_URL"].rstrip("/")
+              trip_types = [t.strip() for t in os.environ["TRIP_TYPES"].split(",") if t.strip()]
+              buckets = [b.strip() for b in os.environ["BUCKETS"].split(",") if b.strip()]
+              prefix = os.environ.get("PREFIX", "").strip().strip("/")
+              skip_existing = os.environ.get("SKIP_EXISTING", "true").lower() == "true"
+
+              start_year = int(os.environ["START_YEAR"])
+              start_month = int(os.environ["START_MONTH"])
+              end_year = int(os.environ["END_YEAR"])
+              end_month = int(os.environ["END_MONTH"])
+
+              if not trip_types:
+                  print("No trip types configured.", file=sys.stderr)
+                  sys.exit(1)
+              if not buckets:
+                  print("No buckets configured.", file=sys.stderr)
+                  sys.exit(1)
+              if (start_year, start_month) > (end_year, end_month):
+                  print(
+                      f"Invalid date range: {start_year}-{start_month:02d} > {end_year}-{end_month:02d}",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+
+              endpoint = "http://{{ include "minio.fullname" . }}:{{ .Values.minio.service.apiPort }}"
+              s3 = boto3.client(
+                  "s3",
+                  endpoint_url=endpoint,
+                  aws_access_key_id=os.environ["MINIO_USER"],
+                  aws_secret_access_key=os.environ["MINIO_PASSWORD"],
+              )
+
+              imported = 0
+              skipped = 0
+              missing = 0
+              failed = 0
+
+              for year, month in month_range(start_year, start_month, end_year, end_month):
+                  for trip_type in trip_types:
+                      source_url = f"{base_url}/{trip_type}_{year:04d}-{month:02d}.parquet"
+                      object_key = build_object_key(prefix, trip_type, year, month)
+                      target_buckets = []
+
+                      for bucket in buckets:
+                          if skip_existing:
+                              try:
+                                  s3.head_object(Bucket=bucket, Key=object_key)
+                                  print(f"Skipping existing s3://{bucket}/{object_key}")
+                                  skipped += 1
+                                  continue
+                              except s3.exceptions.ClientError as exc:
+                                  code = exc.response.get("Error", {}).get("Code", "")
+                                  if code not in ("404", "NoSuchKey", "NotFound"):
+                                      print(
+                                          f"Error checking s3://{bucket}/{object_key}: {exc}",
+                                          file=sys.stderr,
+                                      )
+                                      failed += 1
+                                      continue
+                          target_buckets.append(bucket)
+
+                      if not target_buckets:
+                          continue
+
+                      print(f"Downloading {source_url}")
+                      tmp_path = None
+                      try:
+                          with urllib.request.urlopen(source_url, timeout=600) as response:
+                              with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+                                  tmp_path = tmp.name
+                                  while True:
+                                      chunk = response.read(8 * 1024 * 1024)
+                                      if not chunk:
+                                          break
+                                      tmp.write(chunk)
+                      except urllib.error.HTTPError as exc:
+                          if exc.code == 404:
+                              print(f"Not found (404): {source_url}")
+                              missing += 1
+                              continue
+                          print(f"Download failed for {source_url}: {exc}", file=sys.stderr)
+                          failed += 1
+                          continue
+                      except Exception as exc:
+                          print(f"Download failed for {source_url}: {exc}", file=sys.stderr)
+                          failed += 1
+                          continue
+
+                      try:
+                          for bucket in target_buckets:
+                              print(f"Uploading to s3://{bucket}/{object_key}")
+                              s3.upload_file(tmp_path, bucket, object_key)
+                              imported += 1
+                      except Exception as exc:
+                          print(f"Upload failed for s3://{bucket}/{object_key}: {exc}", file=sys.stderr)
+                          failed += 1
+                      finally:
+                          if tmp_path and os.path.exists(tmp_path):
+                              os.remove(tmp_path)
+
+              print(
+                  f"Import complete: imported={imported}, skipped={skipped}, "
+                  f"missing={missing}, failed={failed}"
+              )
+              if failed:
+                  sys.exit(1)
+              EOF
+          env:
+            - name: HOME
+              value: /tmp
+            - name: MINIO_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "minio.secretName" . }}
+                  key: user
+            - name: MINIO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "minio.secretName" . }}
+                  key: password
+            - name: BASE_URL
+              value: {{ .Values.dataImport.baseUrl | quote }}
+            - name: TRIP_TYPES
+              value: {{ join "," .Values.dataImport.tripTypes | quote }}
+            - name: BUCKETS
+              value: {{ join "," .Values.dataImport.buckets | quote }}
+            - name: PREFIX
+              value: {{ .Values.dataImport.prefix | quote }}
+            - name: SKIP_EXISTING
+              value: {{ .Values.dataImport.skipExisting | quote }}
+            - name: START_YEAR
+              value: {{ .Values.dataImport.startYear | quote }}
+            - name: START_MONTH
+              value: {{ .Values.dataImport.startMonth | quote }}
+            - name: END_YEAR
+              value: {{ .Values.dataImport.endYear | quote }}
+            - name: END_MONTH
+              value: {{ .Values.dataImport.endMonth | quote }}
+{{- end }}

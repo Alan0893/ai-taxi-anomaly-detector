@@ -14,8 +14,10 @@ Deploy a data science workbench with MinIO storage and Jupyter notebooks to find
 - [Deploy](#deploy)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
+  - [Configuration](#configuration)
   - [Validating the deployment](#validating-the-deployment)
   - [Delete](#delete)
+- [Troubleshooting](#troubleshooting)
 - [Repository structure](#repository-structure)
 - [References](#references)
 - [Technical details](#technical-details)
@@ -29,7 +31,12 @@ This quickstart helps transportation and mobility teams detect unusual taxi trip
 
 Ride-hailing and taxi operators need to spot billing anomalies, fraud patterns, and data quality issues across large trip datasets. Manual review does not scale, and ad-hoc scripts lack the governed environment that enterprise AI platforms provide.
 
-This quickstart addresses that gap by deploying a complete experimentation stack on OpenShift AI. A Helm chart installs MinIO with `dev-data` and `data` buckets, uploads synthetic taxi trip CSV data (including planted anomalies for demonstration), registers OpenShift AI data connections for both buckets, and launches a Standard Data Science Jupyter notebook synced from this repository.
+This quickstart addresses that gap by deploying a complete experimentation stack on OpenShift AI. A Helm chart installs:
+
+- **MinIO** with `dev-data` and `data` buckets (S3-compatible object storage)
+- **Post-install jobs** that create buckets and import NYC TLC trip record parquet files (or optional synthetic CSV for offline demos)
+- **OpenShift AI data connections** for both MinIO buckets
+- **A Standard Data Science Jupyter workbench** with MinIO credentials and notebooks pre-configured
 
 In production, **Zetaris** can serve as the upstream data platform; MinIO holds working copies for experimentation on the cluster. The included notebooks walk through environment validation and anomaly detection with scikit-learn.
 
@@ -39,10 +46,11 @@ In production, **Zetaris** can serve as the upstream data platform; MinIO holds 
 flowchart LR
     subgraph OpenShift["OpenShift AI namespace"]
         Helm["Helm chart"]
-        MinIO["MinIO\n(dev-data, data buckets)"]
-        Notebook["Jupyter Notebook\n(s2i-generic-data-science-notebook)"]
+        MinIO["MinIO\n(dev-data, data)"]
+        Notebook["Jupyter Workbench\n(s2i-generic-data-science-notebook)"]
         DC["Data Connections\n(taxi-dev-data, taxi-data)"]
         Jobs["Post-install Jobs\n(buckets, data upload)"]
+        Init["git-sync initContainer\n(+ embedded fallback)"]
     end
 
     Helm --> MinIO
@@ -52,8 +60,9 @@ flowchart LR
     Helm --> DC
     DC --> MinIO
     Notebook --> MinIO
-    Git["GitHub repo\n(notebooks/)"] --> Jobs
-    Jobs --> Notebook
+    Init --> Notebook
+    Git["GitHub repo\n(notebooks/)"] -.-> Init
+    ChartFiles["chart/files/notebooks\n(fallback bundle)"] -.-> Init
 ```
 
 **Components deployed by the chart:**
@@ -61,9 +70,11 @@ flowchart LR
 | Component | Purpose |
 |-----------|---------|
 | MinIO (subchart) | S3-compatible storage with `dev-data` and `data` buckets |
-| Post-install jobs | Create buckets, upload `taxi_trips.csv`, clone notebooks to PVC |
+| Post-install jobs | Create buckets and import NYC TLC parquet trip data into MinIO |
 | Data connection secrets | OpenShift AI dashboard integration for MinIO buckets |
-| Jupyter Notebook | OpenShift AI workbench with MinIO env vars pre-configured |
+| Jupyter Notebook | OpenShift AI workbench with MinIO env vars and OAuth proxy |
+| git-sync initContainer | Clones `notebooks/` from git; falls back to chart bundle if missing |
+| Service account | `taxi-anomaly-service-account` shared by MinIO, jobs, and workbench |
 
 ## Requirements
 
@@ -81,15 +92,25 @@ flowchart LR
 - Memory: 4 GiB (request) / 8 GiB (limit)
 - Storage: 10 GiB persistent volume (workspace) + 1 GiB shared memory
 
+**Cluster headroom:** OpenShift AI platform components (Kueue, dashboard, notebook controller) also consume worker CPU. Ensure workers have free capacity before installing.
+
 No GPU is required.
 
 ### Minimum software requirements
 
 - OpenShift 4.14 or later
-- OpenShift AI 2.22 or later (tested with the `s2i-generic-data-science-notebook:2025.2` workbench image)
+- OpenShift AI 2.22 or later (tested with `s2i-generic-data-science-notebook:2025.2`)
 - `oc` CLI (version 4.14+) installed and authenticated
 - `helm` CLI (version 3.12+) installed
 - `make` (optional, for Makefile targets)
+
+Verify OpenShift AI is healthy before installing:
+
+```bash
+oc get datasciencecluster -A
+oc get pods -n redhat-ods-applications
+oc get route rhods-dashboard -n redhat-ods-applications
+```
 
 ### Required user permissions
 
@@ -97,7 +118,7 @@ This quickstart can be deployed by any user with:
 
 - Permission to create OpenShift projects
 - Permission to deploy Helm charts in their project
-- Access to the OpenShift AI dashboard to launch the notebook workbench
+- Access to the OpenShift AI dashboard to launch the workbench
 
 No cluster admin access is required.
 
@@ -107,16 +128,29 @@ No cluster admin access is required.
 
 Before deploying, ensure you have:
 
-- Access to a Red Hat OpenShift cluster with OpenShift AI installed
+- A Red Hat OpenShift cluster with **OpenShift AI installed and healthy**
 - `oc` CLI authenticated to the cluster
 - `helm` CLI installed
-- Sufficient storage capacity for two 10 GiB persistent volume claims
+- Sufficient storage for two 10 GiB persistent volume claims (MinIO + notebook workspace)
+- A workbench image tag that exists on your cluster:
+
+```bash
+oc get imagestreamtag -n redhat-ods-applications | grep generic-data-science
+```
 
 ### Installation
 
 #### Option A: Using the Makefile (recommended)
 
-The Makefile provides targets for project and chart lifecycle management. Override `NAMESPACE` as needed:
+The Makefile manages project creation, Helm install/uninstall, and auto-detects OpenShift AI settings:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NAMESPACE` | `ai-taxi-anomaly-detector` | OpenShift project name |
+| `RELEASE_NAME` | `ai-taxi-anomaly-detector` | Helm release name |
+| `OPENSHIFT_USER` | `oc whoami` | Workbench owner (required) |
+| `DASHBOARD_HOST` | rhods-dashboard route host | Required for dashboard links |
+| `TIMEOUT` | `15m` | Helm `--wait` timeout |
 
 ```bash
 git clone https://github.com/rh-ai-quickstart/ai-taxi-anomaly-detector.git
@@ -125,10 +159,14 @@ cd ai-taxi-anomaly-detector
 # Create the OpenShift project
 make create-project NAMESPACE=ai-taxi-anomaly-detector
 
-The Makefile auto-detects `notebook.username` (`oc whoami`) and `notebook.dashboard.host` (rhods-dashboard route). Override if needed:
+# Install (auto-detects oc whoami and rhods-dashboard route)
+make install NAMESPACE=ai-taxi-anomaly-detector
+```
+
+Override detection if needed:
 
 ```bash
-make install NAMESPACE=ai-taxi-anomaly-detector \
+make install NAMESPACE=my-taxi-demo \
   OPENSHIFT_USER="$(oc whoami)" \
   DASHBOARD_HOST="$(oc get route rhods-dashboard -n redhat-ods-applications -o jsonpath='{.spec.host}')"
 ```
@@ -155,43 +193,85 @@ oc new-project ${NAMESPACE}
 helm dependency update ./chart
 helm upgrade --install ai-taxi-anomaly-detector ./chart \
   --namespace ${NAMESPACE} \
+  --set notebook.username="$(oc whoami)" \
+  --set notebook.dashboard.host="$(oc get route rhods-dashboard -n redhat-ods-applications -o jsonpath='{.spec.host}')" \
   --wait \
   --timeout 15m
 ```
 
-Post-install hooks automatically:
+### Configuration
 
-- Create MinIO buckets (`dev-data`, `data`)
-- Upload synthetic `taxi_trips.csv` with planted anomalies to both buckets
-- Clone notebooks from git into the workbench workspace via an initContainer
+Key values in `chart/values.yaml`:
+
+| Value | Default | Notes |
+|-------|---------|-------|
+| `minio.buckets.names` | `dev-data`, `data` | Use hyphens only (S3 bucket naming rules) |
+| `dataImport.enabled` | `true` | Import NYC TLC parquet files after bucket creation |
+| `dataImport.startYear` / `startMonth` | `2025` / `10` | First month to import (inclusive) |
+| `dataImport.endYear` / `endMonth` | `2026` / `1` | Last month to import (inclusive) |
+| `dataImport.tripTypes` | yellow, green, fhv, fhvhv | TLC dataset prefixes; files are `{type}_{YYYY-MM}.parquet` |
+| `dataImport.buckets` | `data` | MinIO buckets to receive imported files |
+| `dataImport.prefix` | `tlc-trip-data` | Object key prefix under each bucket |
+| `dataUpload.enabled` | `false` | Set `true` for synthetic `taxi_trips.csv` instead of TLC import |
+| `minio.serviceAccount.name` | `taxi-anomaly-service-account` | Must match parent `serviceAccount.name` |
+| `notebook.image.tag` | `2025.2` | Match a tag on your cluster's image stream |
+| `notebook.username` | _(required at install)_ | Set to `oc whoami` output |
+| `notebook.dashboard.host` | _(required at install)_ | RHODS dashboard route host (no `https://`) |
+| `notebook.gitSync.enabled` | `true` | Clone notebooks from git via initContainer |
+| `notebook.gitSync.fallbackToEmbedded` | `true` | Use `chart/files/notebooks` when git has no `notebooks/` |
+| `notebook.gitSync.repo` | `rh-ai-quickstart/ai-taxi-anomaly-detector` | HTTPS git URL |
+| `notebook.gitSync.useJob` | `false` | Set `true` only with ReadWriteMany PVCs |
+
+**Notebook delivery modes:**
+
+1. **Git sync with fallback (default):** initContainer clones from git; if `notebooks/` is missing on the branch, copies bundled notebooks from the chart ConfigMap.
+2. **Git sync only:** `notebook.gitSync.fallbackToEmbedded: false` — fails until `notebooks/` exists on the configured branch.
+3. **Chart embed only:** `notebook.gitSync.enabled: false` and `notebook.notebooks.embedFromChart: true`.
+4. **Hook Job (advanced):** `notebook.gitSync.useJob: true` — separate post-install Job; requires an RWX storage class to avoid multi-attach errors on the default RWO PVC.
 
 ### Validating the deployment
 
-1. Check that pods and jobs completed successfully:
+1. Check pods and jobs:
 
 ```bash
 oc get pods,jobs -n ${NAMESPACE}
 ```
 
-Expected resources include a MinIO pod, the notebook workbench pod (with a git-sync initContainer), and completed post-install jobs (`*-minio-create-buckets`, `*-upload-taxi-data`).
+Expected resources:
 
-2. Verify MinIO buckets contain data (from a pod with network access):
+- `pod/minio-0` — Running
+- `pod/ai-taxi-anomaly-detector-notebook-0` — Running (with completed `git-sync-notebooks` initContainer)
+- `job/ai-taxi-anomaly-detector-minio-create-buckets` — Complete
+- `job/ai-taxi-anomaly-detector-import-taxi-data` — Complete (when `dataImport.enabled`)
+- `job/ai-taxi-anomaly-detector-upload-taxi-data` — Complete (when `dataUpload.enabled`)
+
+2. Verify MinIO routes and credentials:
 
 ```bash
+oc get routes -n ${NAMESPACE} | grep minio
 oc get secret minio -n ${NAMESPACE} -o jsonpath='{.data.user}' | base64 -d && echo
 ```
 
-3. Open the OpenShift AI dashboard, select your project, and launch the **Taxi Anomaly Detector** workbench (visible under your OpenShift username).
+3. Open the OpenShift AI dashboard, select your project, and launch the **Taxi Anomaly Detector** workbench under your OpenShift username.
 
-4. In the workbench, open `notebooks/init_check.ipynb` to verify MinIO connectivity and data upload, then run `notebooks/taxi_anomaly_detector.ipynb` to detect anomalies with Isolation Forest.
+4. Run the notebooks:
 
-5. Confirm data connections appear in the dashboard:
+- `notebooks/init_check.ipynb` — verify MinIO connectivity and uploaded data
+- `notebooks/taxi_anomaly_detector.ipynb` — Isolation Forest anomaly detection
+
+5. Confirm data connections:
 
 ```bash
 oc get secrets -n ${NAMESPACE} -l opendatahub.io/managed=true
 ```
 
-You should see `taxi-dev-data` and `taxi-data` connection secrets.
+You should see `taxi-dev-data` and `taxi-data`.
+
+6. Restart the workbench after chart upgrades that change notebooks:
+
+```bash
+oc delete pod -n ${NAMESPACE} -l notebook-name=ai-taxi-anomaly-detector-notebook
+```
 
 ### Delete
 
@@ -204,54 +284,67 @@ make delete-project NAMESPACE=ai-taxi-anomaly-detector
 
 #### Manual deletion
 
-1. Uninstall the Helm release:
-
 ```bash
 helm uninstall ai-taxi-anomaly-detector --namespace ${NAMESPACE}
-```
-
-2. Delete the project (removes remaining resources including PVCs):
-
-```bash
 oc delete project ${NAMESPACE}
 ```
 
-> **Note:** The notebook workspace PVC is annotated with `helm.sh/resource-policy: keep` and may persist after `helm uninstall` if it was already bound. Deleting the project removes it.
+> **Note:** The notebook workspace PVC uses `helm.sh/resource-policy: keep` and may survive `helm uninstall`. Deleting the project removes it.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `no matches for kind "Notebook"` | OpenShift AI not installed | Install OpenShift AI; verify `oc api-resources --api-group=kubeflow.org` |
+| Webhook `no endpoints available` | ODS/Kueue pods not running | Fix pods in `redhat-ods-applications`; free worker CPU |
+| `ErrImagePull` for workbench image | Image tag missing on cluster | `oc get imagestreamtag -n redhat-ods-applications \| grep datascience`; update `notebook.image.tag` |
+| Dashboard workbench link does not resolve | Wrong user or missing dashboard host | Set `notebook.username` to `oc whoami` and `notebook.dashboard.host` to rhods-dashboard route |
+| `serviceaccount "taxi-anomaly-setup" not found` | Stale values | Ensure `minio.serviceAccount.name` matches `serviceAccount.name` (`taxi-anomaly-service-account`) |
+| `InvalidBucketName` for `dev_data` | Underscores in bucket names | Use `dev-data` (hyphens only) |
+| `Multi-Attach` on notebook PVC | Hook Job + workbench mount same RWO PVC | Use initContainer git sync (`useJob: false`, default) |
+| `notebooks directory not found in repository` | `notebooks/` not on git branch | Push `notebooks/` to GitHub, or keep `fallbackToEmbedded: true` (default) |
+| `git-sync-notebooks` CrashLoopBackOff | Git failed and fallback disabled | Set `notebook.gitSync.fallbackToEmbedded: true` |
+| Helm `another operation is in progress` | Cancelled or stuck install | `helm history <release> -n <ns>` then `helm rollback` |
+| MinIO pod Pending | Insufficient worker CPU | Free cluster resources or add worker capacity |
 
 ## Repository structure
 
 ```
 .
 ├── Makefile                          # OpenShift project and Helm lifecycle targets
-├── chart/                            # Helm chart for deploying the quickstart
+├── chart/                            # Helm chart
 │   ├── files/
-│   │   └── notebooks/                # Optional embed source (notebook.notebooks.embedFromChart)
-│   ├── Chart.yaml                    # Chart metadata and MinIO subchart dependency
+│   │   └── notebooks/                # Symlink to ../../notebooks (gitSync fallback bundle)
+│   ├── Chart.yaml                    # Chart metadata; MinIO subchart dependency
 │   ├── Chart.lock                    # Locked dependency versions
-│   ├── values.yaml                   # MinIO, notebook, and data connection defaults
+│   ├── values.yaml                   # Default configuration
 │   └── templates/
-│       ├── _helpers.tpl              # Template helpers
+│       ├── _helpers.tpl
 │       ├── hooks/
-│       │   ├── post-install-buckets.yaml   # Create MinIO buckets
-│       │   └── post-install-upload-data.yaml  # Upload taxi_trips.csv
+│       │   ├── post-install-buckets.yaml
+│       │   ├── post-install-import-taxi-data.yaml
+│       │   └── post-install-upload-data.yaml
 │       ├── notebook/
-│       │   ├── notebooks-configmap.yaml  # Embeds notebooks from chart/files/notebooks
-│       │   ├── copy-notebooks.yaml   # Optional hook Job (gitSync.useJob; requires RWX PVC)
-│       │   ├── data-connections.yaml # OpenShift AI S3 data connection secrets
-│       │   ├── notebook.yaml         # Kubeflow Notebook workbench
-│       │   └── pvc.yaml              # Notebook workspace storage
+│       │   ├── _git-sync.tpl           # Git clone + embedded fallback script
+│       │   ├── copy-notebooks.yaml     # Optional hook Job (gitSync.useJob)
+│       │   ├── data-connections.yaml
+│       │   ├── notebook.yaml           # Kubeflow Notebook workbench
+│       │   ├── notebooks-configmap.yaml
+│       │   └── pvc.yaml
 │       └── rbac/
-│           └── serviceaccount.yaml   # Service account for setup jobs
+│           └── serviceaccount.yaml
 ├── notebooks/
-│   ├── init_check.ipynb              # Verify MinIO connectivity and uploaded data
-│   └── taxi_anomaly_detector.ipynb   # Isolation Forest anomaly detection demo
+│   ├── init_check.ipynb
+│   └── taxi_anomaly_detector.ipynb
 └── README.md
 ```
 
 ## References
 
 - [OpenShift AI Documentation](https://docs.redhat.com/en/openshift_ai)
+- [Creating a workbench (Notebook CRD)](https://opendatahub.io/docs/api-workbench/)
 - [ai-architecture-charts MinIO chart](https://github.com/rh-ai-quickstart/ai-architecture-charts)
+- [NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
 - [scikit-learn Isolation Forest](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html)
 
 ## Technical details
@@ -260,25 +353,36 @@ oc delete project ${NAMESPACE}
 
 **MinIO subchart:** `minio` v0.5.5 from [ai-architecture-charts](https://rh-ai-quickstart.github.io/ai-architecture-charts)
 
-**Default MinIO credentials** (override in production via `values.yaml`):
+**Default MinIO credentials** (override in production):
 
 | Key | Value |
 |-----|-------|
 | User | `taxi_minio_user` |
 | Password | `taxi_minio_password` |
 | Endpoint | `http://minio:9000` |
+| Buckets | `dev-data`, `data` |
+| TLC import prefix | `tlc-trip-data/{tripType}_{YYYY-MM}.parquet` |
+| Synthetic object key | `taxi_trips.csv` (when `dataUpload.enabled`) |
 
-**Synthetic dataset:** 500 taxi trips with columns `trip_id`, `vendor_id`, `pickup_datetime`, `passenger_count`, `trip_distance`, `fare_amount`, `tip_amount`. Ten rows contain injected distance/fare anomalies.
+**NYC TLC import:** Post-install job downloads parquet files from `https://d37ci6vzurychx.cloudfront.net/trip-data/` for each configured month and trip type (`yellow_tripdata`, `green_tripdata`, `fhv_tripdata`, `fhvhv_tripdata`). TLC data is published roughly two months behind the current calendar month — adjust `dataImport.endYear` / `endMonth` accordingly. Large date ranges can exceed the default 10 GiB MinIO volume.
 
-**Notebook image:** `s2i-generic-data-science-notebook:2025.2` from the cluster's `redhat-ods-applications` image stream. List available tags with `oc get imagestreamtag -n redhat-ods-applications | grep datascience`.
+**Synthetic dataset:** 500 taxi trips (`trip_id`, `vendor_id`, `pickup_datetime`, `passenger_count`, `trip_distance`, `fare_amount`, `tip_amount`). Ten rows contain injected distance/fare anomalies.
 
-**Notebook configuration:** The chart sets `notebooks.opendatahub.io/inject-oauth: "true"` (oauth-proxy sidecar for dashboard access), `opendatahub.io/username` (your OpenShift user), and `ServerApp.tornado_settings` with the RHODS dashboard host so workbench links resolve correctly.
+**Workbench image:** `s2i-generic-data-science-notebook:2025.2` from `redhat-ods-applications`. List tags with:
 
-Notebooks are cloned from git via an **initContainer** (`notebook.gitSync`). If `notebooks/` is not yet on the configured branch, `notebook.gitSync.fallbackToEmbedded: true` copies the chart-bundled notebooks from `chart/files/notebooks` so the workbench still starts.
+```bash
+oc get imagestreamtag -n redhat-ods-applications | grep generic-data-science
+```
 
-**Environment variables** injected into the notebook for S3 access: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION`, `AWS_S3_BUCKET`, `TAXI_DATA_BUCKET`, `TAXI_DEV_DATA_BUCKET`, `TAXI_DATA_OBJECT`.
+**Workbench OpenShift AI integration:**
 
-**Anomaly detection:** `IsolationForest(contamination=0.02)` on `passenger_count`, `trip_distance`, `fare_amount`, and `tip_amount`.
+- `notebooks.opendatahub.io/inject-oauth: "true"` — oauth-proxy sidecar for dashboard access
+- `opendatahub.io/username` — must match `oc whoami`
+- `ServerApp.tornado_settings` — dashboard host and project prefix for correct URLs
+
+**Notebook environment variables:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION`, `AWS_S3_BUCKET`, `TAXI_DATA_BUCKET`, `TAXI_DEV_DATA_BUCKET`, `TAXI_DATA_OBJECT`
+
+**Anomaly detection:** `IsolationForest(contamination=0.02)` on `passenger_count`, `trip_distance`, `fare_amount`, `tip_amount`
 
 ## Tags
 
