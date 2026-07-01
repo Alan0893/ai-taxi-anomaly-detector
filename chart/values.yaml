@@ -101,6 +101,7 @@ dataImport:
   buckets:
     - data
   prefix: tlc-trip-data
+  notebookTripType: yellow_tripdata
   skipExisting: true
   activeDeadlineSeconds: 7200
   resources:
