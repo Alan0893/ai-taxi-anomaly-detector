@@ -34,7 +34,7 @@ Ride-hailing and taxi operators need to spot billing anomalies, fraud patterns, 
 This quickstart addresses that gap by deploying a complete experimentation stack on OpenShift AI. A Helm chart installs:
 
 - **MinIO** with `dev-data` and `data` buckets (S3-compatible object storage)
-- **Post-install jobs** that create buckets and import NYC TLC trip record parquet files (or optional synthetic CSV for offline demos)
+- **Post-install jobs** that create buckets and import NYC TLC trip record parquet files
 - **OpenShift AI data connections** for both MinIO buckets
 - **A Standard Data Science Jupyter workbench** with MinIO credentials and notebooks pre-configured
 
@@ -212,7 +212,6 @@ Key values in `chart/values.yaml`:
 | `dataImport.tripTypes` | yellow, green, fhv, fhvhv | TLC dataset prefixes; files are `{type}_{YYYY-MM}.parquet` |
 | `dataImport.buckets` | `data` | MinIO buckets to receive imported files |
 | `dataImport.prefix` | `tlc-trip-data` | Object key prefix under each bucket |
-| `dataUpload.enabled` | `false` | Set `true` for synthetic `taxi_trips.csv` instead of TLC import |
 | `minio.serviceAccount.name` | `taxi-anomaly-service-account` | Must match parent `serviceAccount.name` |
 | `notebook.image.tag` | `2025.2` | Match a tag on your cluster's image stream |
 | `notebook.username` | _(required at install)_ | Set to `oc whoami` output |
@@ -243,8 +242,6 @@ Expected resources:
 - `pod/ai-taxi-anomaly-detector-notebook-0` — Running (with completed `git-sync-notebooks` initContainer)
 - `job/ai-taxi-anomaly-detector-minio-create-buckets` — Complete
 - `job/ai-taxi-anomaly-detector-import-taxi-data` — Complete (when `dataImport.enabled`)
-- `job/ai-taxi-anomaly-detector-upload-taxi-data` — Complete (when `dataUpload.enabled`)
-
 2. Verify MinIO routes and credentials:
 
 ```bash
@@ -322,8 +319,7 @@ oc delete project ${NAMESPACE}
 │       ├── _helpers.tpl
 │       ├── hooks/
 │       │   ├── post-install-buckets.yaml
-│       │   ├── post-install-import-taxi-data.yaml
-│       │   └── post-install-upload-data.yaml
+│       │   └── post-install-import-taxi-data.yaml
 │       ├── notebook/
 │       │   ├── _git-sync.tpl           # Git clone + embedded fallback script
 │       │   ├── copy-notebooks.yaml     # Optional hook Job (gitSync.useJob)
@@ -362,11 +358,8 @@ oc delete project ${NAMESPACE}
 | Endpoint | `http://minio:9000` |
 | Buckets | `dev-data`, `data` |
 | TLC import prefix | `tlc-trip-data/{tripType}_{YYYY-MM}.parquet` |
-| Synthetic object key | `taxi_trips.csv` (when `dataUpload.enabled`) |
 
 **NYC TLC import:** Post-install job downloads parquet files from `https://d37ci6vzurychx.cloudfront.net/trip-data/` for each configured month and trip type (`yellow_tripdata`, `green_tripdata`, `fhv_tripdata`, `fhvhv_tripdata`). TLC data is published roughly two months behind the current calendar month — adjust `dataImport.endYear` / `endMonth` accordingly. Large date ranges can exceed the default 10 GiB MinIO volume.
-
-**Synthetic dataset:** 500 taxi trips (`trip_id`, `vendor_id`, `pickup_datetime`, `passenger_count`, `trip_distance`, `fare_amount`, `tip_amount`). Ten rows contain injected distance/fare anomalies.
 
 **Workbench image:** `s2i-generic-data-science-notebook:2025.2` from `redhat-ods-applications`. List tags with:
 
@@ -380,7 +373,7 @@ oc get imagestreamtag -n redhat-ods-applications | grep generic-data-science
 - `opendatahub.io/username` — must match `oc whoami`
 - `ServerApp.tornado_settings` — dashboard host and project prefix for correct URLs
 
-**Notebook environment variables:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION`, `AWS_S3_BUCKET`, `TAXI_DATA_BUCKET`, `TAXI_DEV_DATA_BUCKET`, `TAXI_DATA_OBJECT`
+**Notebook environment variables:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION`, `AWS_S3_BUCKET`, `TAXI_DATA_BUCKET`, `TAXI_DEV_DATA_BUCKET`, `TAXI_DATA_PREFIX`, `TAXI_DATA_TRIP_TYPE`
 
 **Anomaly detection:** `IsolationForest(contamination=0.02)` on `passenger_count`, `trip_distance`, `fare_amount`, `tip_amount`
 
