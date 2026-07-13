@@ -74,14 +74,6 @@ minio:
     create: false
     name: taxi-anomaly-service-account
 
-# Post-install job uploads synthetic taxi CSV data to MinIO buckets (demo / offline use)
-dataUpload:
-  enabled: false
-  buckets:
-    - dev-data
-    - data
-  objectKey: taxi_trips.csv
-
 # Post-install job imports NYC TLC trip record parquet files into MinIO.
 # Source: https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
 # Files follow {tripType}_{YYYY-MM}.parquet on the TLC CloudFront bucket.
@@ -101,6 +93,7 @@ dataImport:
   buckets:
     - data
   prefix: tlc-trip-data
+  notebookTripType: yellow_tripdata
   skipExisting: true
   activeDeadlineSeconds: 7200
   resources:

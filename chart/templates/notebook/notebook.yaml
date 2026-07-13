@@ -110,8 +110,10 @@ spec:
           value: {{ .Values.notebook.minio.defaultBucket | quote }}
         - name: TAXI_DEV_DATA_BUCKET
           value: {{ index .Values.minio.buckets.names 0 | quote }}
-        - name: TAXI_DATA_OBJECT
-          value: {{ .Values.dataUpload.objectKey | quote }}
+        - name: TAXI_DATA_PREFIX
+          value: {{ .Values.dataImport.prefix | quote }}
+        - name: TAXI_DATA_TRIP_TYPE
+          value: {{ .Values.dataImport.notebookTripType | quote }}
         ports:
         - containerPort: 8888
           name: notebook-port
