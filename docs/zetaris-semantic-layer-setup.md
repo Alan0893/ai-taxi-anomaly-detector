@@ -253,3 +253,140 @@ Expected: `hail_type` values with decoded labels (`Street-hail`, `Dispatch`).
 | ehail_fee | double | green only | E-hail fee (NULL for yellow) |
 | hail_type | bigint | green only | Original green `trip_type` code (NULL for yellow) |
 | hail_type_label | string | computed | 1=Street-hail, 2=Dispatch (NULL for yellow) |
+
+## 5. REST API Access
+
+The Zetaris REST API allows programmatic SQL queries against the semantic layer. Full API docs are available at the Redoc endpoint (see below).
+
+### Endpoints
+
+| Operation | Method | Path | Description |
+|---|---|---|---|
+| Login | `GET` | `/api/v1.0/auth/login` | Basic Auth (email/password) to obtain a bearer token |
+| Refresh | `GET` | `/api/v1.0/auth/refresh` | Refresh an expired `idToken` using the `refreshToken` |
+| OpenSqlQuery | `POST` | `/api/v1.0/query/sql/start` | Begin a SQL query; returns page 1 and a `queryToken` |
+| PageSqlQuery | `GET` | `/api/v1.0/query/sql/page` | Fetch a specific page of a running query |
+| CloseSqlQuery | `DELETE` | `/api/v1.0/query/sql/close/{queryToken}` | Release server-side query resources |
+
+**Base URL:** `https://api.<zetaris-namespace>.apps.<cluster-domain>`
+
+**API docs (Redoc):** `<base-url>/redoc/index.html`
+
+### Required Headers
+
+All endpoints require:
+
+| Header | Value |
+|---|---|
+| `X-Request-ID` | Any UUID (e.g., `00000000-0000-0000-0000-000000000001`) |
+| `X-Org-ID` | Organization ID (integer, typically `1`) |
+
+Query endpoints (`OpenSqlQuery`, `PageSqlQuery`, `CloseSqlQuery`) additionally require:
+
+| Header | Value |
+|---|---|
+| `Authorization` | `Bearer <idToken>` (obtained from Login) |
+
+### Authentication
+
+Login uses HTTP Basic Auth and returns a JWT pair:
+
+```bash
+curl -s -u '<email>:<password>' \
+  -H 'X-Request-ID: 00000000-0000-0000-0000-000000000001' \
+  -H 'X-Org-ID: 1' \
+  '<base-url>/api/v1.0/auth/login'
+```
+
+Response:
+
+```json
+{
+  "idToken": "eyJ0eXAi...",
+  "refreshToken": "eyJ0eXAi..."
+}
+```
+
+The `idToken` (15-minute TTL) is used as the bearer token for query endpoints. Use the Refresh endpoint with the `refreshToken` (1-hour TTL) to obtain a new pair without re-authenticating.
+
+### OpenSqlQuery
+
+Begin executing a SQL query. Returns the first page of results and a `queryToken` for pagination.
+
+```bash
+curl -s -X POST \
+  -H 'Authorization: Bearer <idToken>' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-ID: 00000000-0000-0000-0000-000000000002' \
+  -H 'X-Org-ID: 1' \
+  -d '{"select": "SELECT trip_type, COUNT(*) AS cnt FROM taxi.taxi_trips GROUP BY trip_type", "pageLimit": 10}' \
+  '<base-url>/api/v1.0/query/sql/start'
+```
+
+Request body:
+
+| Field | Type | Description |
+|---|---|---|
+| `select` | string | SQL query to execute |
+| `pageLimit` | int | Max records per page (1-100) |
+
+Response:
+
+```json
+{
+  "records": [{"trip_type": "yellow", "cnt": "16640038"}, {"trip_type": "green", "cnt": "184836"}],
+  "pageNumber": 1,
+  "pageLimit": 10,
+  "totalCount": 2,
+  "totalPages": 1,
+  "queryToken": "MGJmZjU1ZjgtYTc2NC00MTNjLTk0YTYtYTkwNDQwOGVjMDQy"
+}
+```
+
+### PageSqlQuery
+
+Fetch a specific page of results from a running query.
+
+```bash
+curl -s \
+  -H 'Authorization: Bearer <idToken>' \
+  -H 'X-Request-ID: 00000000-0000-0000-0000-000000000003' \
+  -H 'X-Org-ID: 1' \
+  '<base-url>/api/v1.0/query/sql/page?queryToken=<queryToken>&pageLimit=10&pageNumber=2'
+```
+
+Query parameters:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `queryToken` | string | Token from `OpenSqlQuery` response |
+| `pageLimit` | int | Max records per page |
+| `pageNumber` | int | Page number to fetch |
+
+### CloseSqlQuery
+
+Release server-side resources for a completed query.
+
+```bash
+curl -s -X DELETE \
+  -H 'Authorization: Bearer <idToken>' \
+  -H 'X-Request-ID: 00000000-0000-0000-0000-000000000004' \
+  -H 'X-Org-ID: 1' \
+  '<base-url>/api/v1.0/query/sql/close/<queryToken>'
+```
+
+Returns HTTP 200 with an empty body on success.
+
+### Postman Collection
+
+A ready-to-import Postman collection is provided at [`docs/zetaris-api.postman_collection.json`](zetaris-api.postman_collection.json).
+
+To use it:
+
+1. Import the collection in Postman (File > Import)
+2. Update the Login request's Basic Auth credentials with your Zetaris email and password
+3. Send **Login** first — the test script auto-saves `idToken` and `refreshToken` to collection variables
+4. Send **OpenSqlQuery** — the test script auto-saves `queryToken` for use by PageSqlQuery and CloseSqlQuery
+5. Send **PageSqlQuery** or **CloseSqlQuery** as needed — they reference `{{queryToken}}` automatically
+
+> **Note:** The collection ships with a placeholder password (`<your-password>`). Update it in the Login request's Authorization tab before first use.
