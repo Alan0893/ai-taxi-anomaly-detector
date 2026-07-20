@@ -74,7 +74,6 @@ In each table's column list, rename the **Virtual Column** fields as follows.
 | VendorID | vendor_id |
 | lpep_pickup_datetime | pickup_datetime |
 | lpep_dropoff_datetime | dropoff_datetime |
-| store_and_fwd_flag | store_and_fwd_flag |
 | RatecodeID | rate_code_id |
 | PULocationID | pu_location_id |
 | DOLocationID | do_location_id |
@@ -89,7 +88,6 @@ In each table's column list, rename the **Virtual Column** fields as follows.
 | tpep_pickup_datetime | pickup_datetime |
 | tpep_dropoff_datetime | dropoff_datetime |
 | RatecodeID | rate_code_id |
-| store_and_fwd_flag | store_and_fwd_flag |
 | PULocationID | pu_location_id |
 | DOLocationID | do_location_id |
 | passenger_count | passenger_count |
