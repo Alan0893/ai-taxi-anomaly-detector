@@ -1,0 +1,166 @@
+{
+	"info": {
+		"name": "Zetaris Lightning API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{idToken}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://api.zetaris-test.apps.lab01.appeng-ai.devcluster.openshift.com"
+		},
+		{
+			"key": "orgId",
+			"value": "1"
+		},
+		{
+			"key": "idToken",
+			"value": ""
+		},
+		{
+			"key": "refreshToken",
+			"value": ""
+		},
+		{
+			"key": "queryToken",
+			"value": ""
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"pm.request.headers.upsert({",
+					"    key: 'X-Request-ID',",
+					"    value: pm.variables.replaceIn('{{$guid}}')",
+					"});",
+					"pm.request.headers.upsert({",
+					"    key: 'X-Org-ID',",
+					"    value: pm.collectionVariables.get('orgId')",
+					"});"
+				]
+			}
+		}
+	],
+	"item": [
+		{
+			"name": "Login",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"if (pm.response.code === 200) {",
+							"    var body = pm.response.json();",
+							"    pm.collectionVariables.set('idToken', body.idToken);",
+							"    pm.collectionVariables.set('refreshToken', body.refreshToken);",
+							"}"
+						]
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "basic",
+					"basic": [
+						{ "key": "username", "value": "dev@account.com", "type": "string" },
+						{ "key": "password", "value": "<your-password>", "type": "string" }
+					]
+				},
+				"method": "GET",
+				"url": "{{baseUrl}}/api/v1.0/auth/login"
+			}
+		},
+		{
+			"name": "Refresh Token",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"if (pm.response.code === 200) {",
+							"    var body = pm.response.json();",
+							"    pm.collectionVariables.set('idToken', body.idToken);",
+							"    pm.collectionVariables.set('refreshToken', body.refreshToken);",
+							"}"
+						]
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{ "key": "token", "value": "{{refreshToken}}", "type": "string" }
+					]
+				},
+				"method": "GET",
+				"url": "{{baseUrl}}/api/v1.0/auth/refresh"
+			}
+		},
+		{
+			"name": "OpenSqlQuery",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"if (pm.response.code === 200) {",
+							"    var body = pm.response.json();",
+							"    pm.collectionVariables.set('queryToken', body.queryToken);",
+							"}"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"select\": \"SELECT trip_type, COUNT(*) AS cnt FROM taxi.taxi_trips GROUP BY trip_type\",\n    \"pageLimit\": 10\n}"
+				},
+				"url": "{{baseUrl}}/api/v1.0/query/sql/start"
+			}
+		},
+		{
+			"name": "PageSqlQuery",
+			"request": {
+				"method": "GET",
+				"url": {
+					"raw": "{{baseUrl}}/api/v1.0/query/sql/page?queryToken={{queryToken}}&pageLimit=10&pageNumber=2",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1.0", "query", "sql", "page"],
+					"query": [
+						{ "key": "queryToken", "value": "{{queryToken}}" },
+						{ "key": "pageLimit", "value": "10" },
+						{ "key": "pageNumber", "value": "2" }
+					]
+				}
+			}
+		},
+		{
+			"name": "CloseSqlQuery",
+			"request": {
+				"method": "DELETE",
+				"url": "{{baseUrl}}/api/v1.0/query/sql/close/{{queryToken}}"
+			}
+		}
+	]
+}
