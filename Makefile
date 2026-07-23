@@ -11,6 +11,7 @@ DASHBOARD_HOST ?= $(shell oc get route rhods-dashboard -n $(ODS_NAMESPACE) -o js
 ZETARIS_API_URL ?=
 ZETARIS_API_KEY ?=
 ZETARIS_ORG_ID ?=
+NOTEBOOK_GIT_BRANCH ?=
 
 .PHONY: help create-project install uninstall delete-project
 
@@ -24,6 +25,7 @@ help: ## Display available targets
 	@echo "  CHART_DIR=$(CHART_DIR)"
 	@echo "  OPENSHIFT_USER=$(OPENSHIFT_USER)"
 	@echo "  DASHBOARD_HOST=$(DASHBOARD_HOST)"
+	@echo "  NOTEBOOK_GIT_BRANCH=$(or $(NOTEBOOK_GIT_BRANCH),(default: main))"
 	@echo "  ZETARIS_API_URL=$(if $(ZETARIS_API_URL),(set),(not set))"
 	@echo "  ZETARIS_API_KEY=$(if $(ZETARIS_API_KEY),(set),(not set))"
 	@echo "  ZETARIS_ORG_ID=$(if $(ZETARIS_ORG_ID),(set),(not set))"
@@ -45,6 +47,7 @@ install: ## Install the ai-taxi-anomaly-detector Helm chart
 	@echo "  zetaris.apiUrl=$(ZETARIS_API_URL)"
 	@echo "  zetaris.apiKey=$(if $(ZETARIS_API_KEY),$(shell echo "$(ZETARIS_API_KEY)" | sed 's/.*\(.\{4\}\)$$/****\1/'),(not set))"
 	@echo "  zetaris.orgId=$(ZETARIS_ORG_ID)"
+	@echo "  notebook.gitSync.branch=$(or $(NOTEBOOK_GIT_BRANCH),main)"
 	@helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
 		--namespace $(NAMESPACE) \
 		--set notebook.username="$(OPENSHIFT_USER)" \
@@ -52,6 +55,7 @@ install: ## Install the ai-taxi-anomaly-detector Helm chart
 		--set zetaris.apiUrl="$(ZETARIS_API_URL)" \
 		--set zetaris.apiKey="$(ZETARIS_API_KEY)" \
 		--set zetaris.orgId="$(ZETARIS_ORG_ID)" \
+		$(if $(NOTEBOOK_GIT_BRANCH),--set notebook.gitSync.branch="$(NOTEBOOK_GIT_BRANCH)") \
 		--wait \
 		--timeout $(TIMEOUT)
 	@echo "Installation complete."
