@@ -6,6 +6,7 @@ Mount the workspace volume at $WORKSPACE_DIR before running.
 {{- define "ai-taxi-anomaly-detector.gitSyncScript" -}}
 set -e
 cd "${WORKSPACE_DIR}"
+GIT_BRANCH="${NOTEBOOK_GIT_BRANCH:-{{ .Values.notebook.gitSync.branch | default "main" }}}"
 NOTEBOOKS_PATH="{{ .Values.notebook.gitSync.notebooksPath }}"
 GIT_OK=0
 
@@ -14,10 +15,11 @@ if [ -d "${NOTEBOOKS_PATH}" ]; then
   rm -rf "${NOTEBOOKS_PATH}"
 fi
 
+echo "Using branch: ${GIT_BRANCH}"
 echo "Cloning repository: {{ .Values.notebook.gitSync.repo }}"
 RETRIES=5
 COUNT=0
-until git clone --depth 1 {{ if .Values.notebook.gitSync.branch }}--branch {{ .Values.notebook.gitSync.branch }}{{ end }} {{ .Values.notebook.gitSync.repo }} /tmp/repo; do
+until git clone --depth 1 --branch "${GIT_BRANCH}" {{ .Values.notebook.gitSync.repo }} /tmp/repo; do
   COUNT=$((COUNT+1))
   if [ $COUNT -ge $RETRIES ]; then
     echo "Failed to clone repository after $RETRIES attempts"
