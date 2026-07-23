@@ -168,3 +168,9 @@ notebook:
   minio:
     endpoint: "http://minio:9000"
     defaultBucket: "data"
+
+# Zetaris Lightning API (semantic layer)
+zetaris:
+  apiUrl: ""
+  apiKey: ""
+  orgId: ""
