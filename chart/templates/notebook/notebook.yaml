@@ -114,6 +114,14 @@ spec:
           value: {{ .Values.dataImport.prefix | quote }}
         - name: TAXI_DATA_TRIP_TYPE
           value: {{ .Values.dataImport.notebookTripType | quote }}
+        {{- if .Values.zetaris }}
+        - name: ZETARIS_API_URL
+          value: {{ .Values.zetaris.apiUrl | quote }}
+        - name: ZETARIS_API_KEY
+          value: {{ .Values.zetaris.apiKey | quote }}
+        - name: ZETARIS_ORG_ID
+          value: {{ .Values.zetaris.orgId | quote }}
+        {{- end }}
         ports:
         - containerPort: 8888
           name: notebook-port

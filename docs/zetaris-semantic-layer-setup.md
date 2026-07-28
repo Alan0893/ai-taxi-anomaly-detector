@@ -339,7 +339,7 @@ Response:
   "pageLimit": 10,
   "totalCount": 2,
   "totalPages": 1,
-  "queryToken": "MGJmZjU1ZjgtYTc2NC00MTNjLTk0YTYtYTkwNDQwOGVjMDQy"
+  "queryToken": "EXAMPLE_QUERY_TOKEN"
 }
 ```
 

@@ -8,6 +8,10 @@ TIMEOUT ?= 15m
 ODS_NAMESPACE ?= redhat-ods-applications
 OPENSHIFT_USER ?= $(shell oc whoami 2>/dev/null)
 DASHBOARD_HOST ?= $(shell oc get route rhods-dashboard -n $(ODS_NAMESPACE) -o jsonpath='{.spec.host}' 2>/dev/null)
+ZETARIS_API_URL ?=
+ZETARIS_API_KEY ?=
+ZETARIS_ORG_ID ?=
+NOTEBOOK_GIT_BRANCH ?=
 
 .PHONY: help create-project install uninstall delete-project
 
@@ -21,6 +25,10 @@ help: ## Display available targets
 	@echo "  CHART_DIR=$(CHART_DIR)"
 	@echo "  OPENSHIFT_USER=$(OPENSHIFT_USER)"
 	@echo "  DASHBOARD_HOST=$(DASHBOARD_HOST)"
+	@echo "  NOTEBOOK_GIT_BRANCH=$(or $(NOTEBOOK_GIT_BRANCH),(default: main))"
+	@echo "  ZETARIS_API_URL=$(if $(ZETARIS_API_URL),(set),(not set))"
+	@echo "  ZETARIS_API_KEY=$(if $(ZETARIS_API_KEY),(set),(not set))"
+	@echo "  ZETARIS_ORG_ID=$(if $(ZETARIS_ORG_ID),(set),(not set))"
 	@echo ""
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
@@ -36,10 +44,18 @@ install: ## Install the ai-taxi-anomaly-detector Helm chart
 	@echo "Installing $(RELEASE_NAME) in project $(NAMESPACE)..."
 	@echo "  notebook.username=$(OPENSHIFT_USER)"
 	@echo "  notebook.dashboard.host=$(DASHBOARD_HOST)"
+	@echo "  zetaris.apiUrl=$(ZETARIS_API_URL)"
+	@echo "  zetaris.apiKey=$(if $(ZETARIS_API_KEY),$(shell echo "$(ZETARIS_API_KEY)" | sed 's/.*\(.\{4\}\)$$/****\1/'),(not set))"
+	@echo "  zetaris.orgId=$(ZETARIS_ORG_ID)"
+	@echo "  notebook.gitSync.branch=$(or $(NOTEBOOK_GIT_BRANCH),main)"
 	@helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
 		--namespace $(NAMESPACE) \
 		--set notebook.username="$(OPENSHIFT_USER)" \
 		--set notebook.dashboard.host="$(DASHBOARD_HOST)" \
+		--set zetaris.apiUrl="$(ZETARIS_API_URL)" \
+		--set zetaris.apiKey="$(ZETARIS_API_KEY)" \
+		--set zetaris.orgId="$(ZETARIS_ORG_ID)" \
+		$(if $(NOTEBOOK_GIT_BRANCH),--set notebook.gitSync.branch="$(NOTEBOOK_GIT_BRANCH)") \
 		--wait \
 		--timeout $(TIMEOUT)
 	@echo "Installation complete."
